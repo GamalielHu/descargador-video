@@ -6,6 +6,7 @@ const NOT_MEDIA = /^(image\/|text\/html|font\/|text\/css)|mp2t/i;
 const MIN_SIZE = 100 * 1024;
 const MULTI_MIN = 16 << 20, MULTI_MAX = 1536 << 20; // rango de tamaño para descarga en varios pedazos (en RAM)
 const MAX_ITEMS = 200;
+const VIDEO_EXT = /\.(mp4|m4v|webm|ogv|mov|mkv|flv|avi|wmv|3gp)$/i;
 const EXT_BY_MIME = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/ogg': 'ogv', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv', 'video/x-flv': 'flv' };
 
 // ---------- estado por pestaña (memoria + storage.session para sobrevivir al reinicio del SW) ----------
@@ -28,7 +29,7 @@ function persist(tabId, st) {
     timers.delete(tabId);
     chrome.storage.session.set({ [key(tabId)]: st }).catch(() => {});
   }, 400));
-  const n = Object.keys(st.items).length;
+  const n = Object.values(st.items).filter(isVideo).length;
   chrome.action.setBadgeText({ tabId, text: n ? String(n) : '' }).catch(() => {});
   chrome.tabs.sendMessage(tabId, { type: 'count', n }, { frameId: 0 }).catch(() => {});
 }
@@ -53,13 +54,47 @@ async function add(tabId, it) {
   if (cur) {
     cur.size = cur.size || it.size || 0;
     cur.mime = cur.mime || it.mime || '';
+    cur.fname = cur.fname || it.fname || '';
     if (!cur.src.includes(it.src)) cur.src.push(it.src);
   } else {
     const keys = Object.keys(st.items);
     if (keys.length >= MAX_ITEMS) delete st.items[keys[0]];
-    st.items[url] = { url, kind: it.kind || kindOf(url, it.mime), mime: it.mime || '', size: it.size || 0, src: [it.src], t: Date.now() };
+    st.items[url] = { url, kind: it.kind || kindOf(url, it.mime), mime: it.mime || '', size: it.size || 0, fname: it.fname || '', src: [it.src], t: Date.now() };
+    if (!st.items[url].size && st.items[url].kind === 'file') probeSize(tabId, url);
   }
   persist(tabId, st);
+}
+
+// Nombre original: Content-Disposition o último tramo de la URL.
+function fileName(it) {
+  if (it.fname) return it.fname;
+  try { return decodeURIComponent(new URL(it.url).pathname.split('/').filter(Boolean).pop() || ''); } catch { return ''; }
+}
+const isVideo = (it) => it.kind === 'hls' || VIDEO_EXT.test(fileName(it));
+
+// Peso de lo detectado solo en el DOM (sin cabeceras): HEAD y, si no hay, Range 0-0.
+async function probeSize(tabId, url) {
+  let size = 0;
+  try {
+    const r = await fetch(url, { method: 'HEAD', credentials: 'include' });
+    size = r.ok ? +(r.headers.get('content-length') || 0) : 0;
+    if (!size) {
+      const g = await fetch(url, { credentials: 'include', headers: { Range: 'bytes=0-0' } });
+      size = +(/\/(\d+)\s*$/.exec(g.headers.get('content-range') || '')?.[1] || 0);
+      g.body?.cancel();
+    }
+  } catch { return; }
+  const st = await load(tabId);
+  const it = st.items[url];
+  if (!it || !size) return;
+  if (size < MIN_SIZE) delete st.items[url]; else it.size = size;
+  persist(tabId, st);
+}
+
+function dispositionName(v) {
+  const m = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(v) || /filename\s*=\s*"?([^";]+)"?/i.exec(v);
+  if (!m) return '';
+  try { return decodeURIComponent(m[1].trim()); } catch { return m[1].trim(); }
 }
 
 const totalSize = (h) => {
@@ -78,7 +113,7 @@ chrome.webRequest.onHeadersReceived.addListener((d) => {
   const kind = kindOf(d.url, mime);
   const size = totalSize(h);
   if (kind === 'file' && size && size < MIN_SIZE) return;
-  add(d.tabId, { url: d.url, mime, size, kind, src: 'red' });
+  add(d.tabId, { url: d.url, mime, size, kind, fname: dispositionName(h['content-disposition'] || ''), src: 'red' });
 }, { urls: ['<all_urls>'], types: ['media', 'xmlhttprequest', 'object', 'other'] }, ['responseHeaders']);
 
 chrome.tabs.onUpdated.addListener((tabId, info) => { if (info.status === 'loading' && info.url) reset(tabId); });
@@ -110,9 +145,10 @@ function ensureOffscreen() {
 async function download(tabId, url) {
   const st = await load(tabId);
   const it = st.items[url] || { url, kind: kindOf(url) };
-  const name = clean(st.title);
+  const orig = it.kind === 'file' ? fileName(it) : '';
+  const name = clean(orig ? orig.replace(/\.[^.]+$/, '') : st.title);
   if (it.kind === 'blob') throw new Error('Un blob: no se puede descargar directo; usa la entrada HLS/red de la lista.');
-  const ext = extOf(it);
+  const ext = (VIDEO_EXT.exec(orig)?.[1] || extOf(it)).toLowerCase();
   const multi = it.kind === 'file' && it.size >= MULTI_MIN && it.size <= MULTI_MAX;
   if (it.kind !== 'hls' && !multi) {
     await chrome.downloads.download({ url: it.url, filename: `${name}.${ext}`, conflictAction: 'uniquify' });
@@ -145,7 +181,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     case 'list':
       load(tabId).then((st) => reply({
         title: st.title,
-        items: Object.values(st.items).sort((a, b) => (b.size || 0) - (a.size || 0)),
+        items: Object.values(st.items).filter(isVideo).map((it) => ({ ...it, name: fileName(it) }))
+          .sort((a, b) => (b.size || 0) - (a.size || 0)),
         jobs: [...jobs.entries()].filter(([, j]) => j.tabId === tabId).map(([id, j]) => ({ id, ...j })),
       }));
       return true;

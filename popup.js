@@ -1,4 +1,4 @@
-import { fmtSize, kindLabel, shortName } from './shared.js';
+import { fmtSize, shortName } from './shared.js';
 
 const $list = document.getElementById('list');
 const $jobs = document.getElementById('jobs');
@@ -46,14 +46,14 @@ async function refresh() {
   const key = r.items.map((i) => i.url + i.size).join('|');
   if (key === lastKey) return;
   lastKey = key;
-  if (!r.items.length) { $list.innerHTML = '<div class="empty">No se detectaron videos. Reproduce el video y vuelve a abrir.</div>'; return; }
+  if (!r.items.length) { $list.innerHTML = '<div class="empty">No se detectaron archivos de video. Reproduce el video y vuelve a abrir.</div>'; return; }
   $list.replaceChildren(...r.items.map((it) => {
-    const meta = [kindLabel[it.kind], fmtSize(it.size), it.src.join('+')].filter(Boolean).join(' · ');
+    const meta = it.kind === 'hls' ? 'Stream HLS · peso al unir' : fmtSize(it.size) || 'calculando peso…';
     const copy = button('Copiar', 'c', (b) => navigator.clipboard.writeText(it.url).then(() => { b.textContent = '✓'; }), it.url);
     const dl = it.kind === 'blob'
       ? button('Bajar', '', null, 'Stream interno de la página; usa la entrada HLS o Archivo')
       : button(it.kind === 'hls' ? 'Unir y bajar' : 'Bajar', '', (b) => download(it.url, b), it.kind === 'dash' ? 'DASH: se baja el manifiesto .mpd' : '');
-    const el = row(shortName(it.url), meta, [copy, dl]);
+    const el = row(it.name || shortName(it.url), meta, [copy, dl]);
     el.querySelector('.t').title = it.url;
     return el;
   }));

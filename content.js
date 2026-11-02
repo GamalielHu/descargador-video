@@ -55,7 +55,6 @@
   // ---------- panel flotante (Shadow DOM cerrado: sin choques de CSS con la página) ----------
   let host, root, btn, list, closed = false, open = false;
   const fmt = (n) => { if (!n) return ''; let i = 0; const u = ['B', 'KB', 'MB', 'GB']; while (n >= 1024 && i < 3) { n /= 1024; i++; } return ` · ${n.toFixed(i ? 1 : 0)} ${u[i]}`; };
-  const KIND = { file: 'Archivo', hls: 'HLS', dash: 'DASH', blob: 'Blob' };
 
   function build() {
     host = document.createElement('div');
@@ -95,11 +94,11 @@
     list.replaceChildren(...r.items.map((it) => {
       const row = document.createElement('div');
       row.className = 'i';
-      const name = decodeURIComponent(new URL(it.url).pathname.split('/').pop() || it.url).slice(0, 80);
+      const name = (it.name || it.url).slice(0, 80);
       row.innerHTML = '<div class="n"><div class="t"></div><div class="m"></div></div><button class="d">Bajar</button>';
       row.querySelector('.t').textContent = name;
       row.querySelector('.t').title = it.url;
-      row.querySelector('.m').textContent = KIND[it.kind] + fmt(it.size);
+      row.querySelector('.m').textContent = it.kind === 'hls' ? 'Stream HLS' : fmt(it.size).slice(3) || 'calculando peso…';
       const b = row.querySelector('.d');
       b.dataset.u = it.url;
       if (it.kind === 'blob') { b.disabled = true; b.title = 'Stream interno; usa la entrada HLS/Archivo'; }
