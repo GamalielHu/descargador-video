@@ -46,6 +46,11 @@
   mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'href'] });
   // src asignado por propiedad (sin atributo): los eventos de medios no burbujean, se capturan.
   document.addEventListener('loadstart', (e) => e.target.tagName === 'VIDEO' && scanEl(e.target), true);
+  document.addEventListener('loadedmetadata', (e) => {
+    const v = e.target;
+    if (v.tagName !== 'VIDEO' || !v.videoHeight || !/^https?:/.test(v.currentSrc)) return;
+    send({ type: 'found', items: [{ url: v.currentSrc, res: `${v.videoWidth}x${v.videoHeight}` }], title: document.title })?.catch?.(() => {});
+  }, true);
   // URLs de fetch/XHR avisadas por inject.js (mundo MAIN).
   window.addEventListener('message', (e) => { if (e.source === window && e.data && e.data.__vdl === 1 && typeof e.data.url === 'string') report(e.data.url, 'fetch'); });
   scanEl(document.documentElement);
@@ -72,6 +77,7 @@
       .m{color:#8b949e;font-size:11px}
       .d{background:#238636;color:#fff;border:0;border-radius:4px;padding:4px 8px;cursor:pointer;font:inherit}
       .d:disabled{background:#30363d;cursor:default}
+      select{max-width:110px;background:#0d1117;color:#eee;border:1px solid #30363d;border-radius:4px;padding:3px;font:inherit}
     </style><div class="p"></div><button class="b"><span>▼ Videos</span><span class="c">0</span><span class="x" title="Ocultar">✕</span></button>`;
     btn = root.querySelector('.b');
     list = root.querySelector('.p');
@@ -83,7 +89,7 @@
       const b = e.target.closest('.d');
       if (!b) return;
       b.disabled = true;
-      send({ type: 'download', url: b.dataset.u }).then((r) => { b.textContent = r && r.ok ? (r.job ? 'Uniendo…' : 'OK') : 'Error'; if (r && r.error) b.title = r.error; });
+      send({ type: 'download', url: b.dataset.u, variant: b.parentElement.querySelector('select')?.value }).then((r) => { b.textContent = r && r.ok ? (r.job ? 'Uniendo…' : 'OK') : 'Error'; if (r && r.error) b.title = r.error; });
     });
     (document.body || document.documentElement).appendChild(host);
   }
@@ -98,8 +104,18 @@
       row.innerHTML = '<div class="n"><div class="t"></div><div class="m"></div></div><button class="d">Bajar</button>';
       row.querySelector('.t').textContent = name;
       row.querySelector('.t').title = it.url;
-      row.querySelector('.m').textContent = it.kind === 'hls' ? 'Stream HLS' : fmt(it.size).slice(3) || 'calculando peso…';
+      const vs = it.variants || [];
+      const q = (res) => (res ? `${res.split('x')[1]}p` : '');
+      row.querySelector('.m').textContent = it.crypt ? 'Cifrado/DRM: no se puede'
+        : it.kind === 'hls' ? (vs.length ? `${vs.length} calidades` : 'Stream HLS')
+        : [q(it.res), fmt(it.size).slice(3) || 'calculando peso…'].filter(Boolean).join(' · ');
       const b = row.querySelector('.d');
+      if (it.crypt) b.disabled = true;
+      if (vs.length) {
+        const sel = document.createElement('select');
+        vs.forEach((v) => sel.add(new Option([q(v.res) || `${Math.round(v.bw / 1000)} kbps`, v.size && '~' + fmt(v.size).slice(3)].filter(Boolean).join(' · '), v.url)));
+        row.insertBefore(sel, b);
+      }
       b.dataset.u = it.url;
       if (it.kind === 'blob') { b.disabled = true; b.title = 'Stream interno; usa la entrada HLS/Archivo'; }
       return row;

@@ -27,9 +27,12 @@ function button(text, cls, fn, title = '') {
   return b;
 }
 
-async function download(url, b) {
+const q = (res) => (res ? `${res.split('x')[1]}p` : '');
+const optLabel = (v) => [q(v.res) || `${Math.round(v.bw / 1000)} kbps`, v.size && '~' + fmtSize(v.size)].filter(Boolean).join(' · ');
+
+async function download(url, b, variant) {
   b.disabled = true;
-  const r = await send({ type: 'download', url });
+  const r = await send({ type: 'download', url, variant });
   b.textContent = r?.ok ? (r.job ? 'Uniendo…' : 'Iniciado') : 'Error';
   if (r?.error) b.title = r.error;
   refresh();
@@ -43,17 +46,25 @@ async function refresh() {
     const meta = j.state === 'error' ? j.error : `${j.state} ${pct}${j.warn ? ' · ' + j.warn : ''}`;
     return row(`Descargando: ${j.name}`, meta, [], j.state === 'error' ? 'e' : j.warn ? 'w' : '');
   }));
-  const key = r.items.map((i) => i.url + i.size).join('|');
+  const key = r.items.map((i) => i.url + i.size + i.res + (i.variants || []).length + i.crypt).join('|');
   if (key === lastKey) return;
   lastKey = key;
   if (!r.items.length) { $list.innerHTML = '<div class="empty">No se detectaron archivos de video. Reproduce el video y vuelve a abrir.</div>'; return; }
   $list.replaceChildren(...r.items.map((it) => {
-    const meta = it.kind === 'hls' ? 'Stream HLS · peso al unir' : fmtSize(it.size) || 'calculando peso…';
+    const vs = it.variants || [];
+    const meta = it.crypt ? 'Cifrado/DRM: no se puede descargar'
+      : it.kind === 'hls' ? (vs.length ? `${vs.length} calidades` : 'Stream HLS' + (it.dur ? ` · ${Math.round(it.dur / 60)} min` : ''))
+      : [q(it.res), fmtSize(it.size) || 'calculando peso…'].filter(Boolean).join(' · ');
+    let sel = null;
+    if (vs.length) {
+      sel = document.createElement('select');
+      vs.forEach((v) => sel.add(new Option(optLabel(v), v.url)));
+    }
     const copy = button('Copiar', 'c', (b) => navigator.clipboard.writeText(it.url).then(() => { b.textContent = '✓'; }), it.url);
     const dl = it.kind === 'blob'
       ? button('Bajar', '', null, 'Stream interno de la página; usa la entrada HLS o Archivo')
-      : button(it.kind === 'hls' ? 'Unir y bajar' : 'Bajar', '', (b) => download(it.url, b), it.kind === 'dash' ? 'DASH: se baja el manifiesto .mpd' : '');
-    const el = row(it.name || shortName(it.url), meta, [copy, dl]);
+      : button(it.kind === 'hls' ? 'Unir y bajar' : 'Bajar', '', it.crypt ? null : (b) => download(it.url, b, sel?.value), it.kind === 'dash' ? 'DASH: se baja el manifiesto .mpd' : '');
+    const el = row(it.name || shortName(it.url), meta, [sel, copy, dl].filter(Boolean), it.crypt ? 'e' : '');
     el.querySelector('.t').title = it.url;
     return el;
   }));

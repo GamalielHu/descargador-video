@@ -29,7 +29,8 @@ function persist(tabId, st) {
     timers.delete(tabId);
     chrome.storage.session.set({ [key(tabId)]: st }).catch(() => {});
   }, 400));
-  const n = Object.values(st.items).filter(isVideo).length;
+  const vs = variantUrls(st);
+  const n = Object.values(st.items).filter((it) => isVideo(it) && !vs.has(it.url)).length;
   chrome.action.setBadgeText({ tabId, text: n ? String(n) : '' }).catch(() => {});
   chrome.tabs.sendMessage(tabId, { type: 'count', n }, { frameId: 0 }).catch(() => {});
 }
@@ -55,12 +56,14 @@ async function add(tabId, it) {
     cur.size = cur.size || it.size || 0;
     cur.mime = cur.mime || it.mime || '';
     cur.fname = cur.fname || it.fname || '';
+    cur.res = it.res || cur.res || '';
     if (!cur.src.includes(it.src)) cur.src.push(it.src);
   } else {
     const keys = Object.keys(st.items);
     if (keys.length >= MAX_ITEMS) delete st.items[keys[0]];
-    st.items[url] = { url, kind: it.kind || kindOf(url, it.mime), mime: it.mime || '', size: it.size || 0, fname: it.fname || '', src: [it.src], t: Date.now() };
+    st.items[url] = { url, kind: it.kind || kindOf(url, it.mime), mime: it.mime || '', size: it.size || 0, fname: it.fname || '', res: it.res || '', src: [it.src], t: Date.now() };
     if (!st.items[url].size && st.items[url].kind === 'file') probeSize(tabId, url);
+    if (st.items[url].kind === 'hls') probeHls(tabId, url);
   }
   persist(tabId, st);
 }
@@ -71,6 +74,42 @@ function fileName(it) {
   try { return decodeURIComponent(new URL(it.url).pathname.split('/').filter(Boolean).pop() || ''); } catch { return ''; }
 }
 const isVideo = (it) => it.kind === 'hls' || VIDEO_EXT.test(fileName(it));
+
+// Calidades HLS: lee la lista maestra, cada variante y estima el peso (BANDWIDTH × duración).
+const hlsDuration = (t) => [...t.matchAll(/#EXTINF:([\d.]+)/g)].reduce((a, m) => a + +m[1], 0);
+const hlsCrypt = (t) => /#EXT-X-(SESSION-)?KEY:[^\n]*METHOD=(?!NONE)/.test(t);
+async function probeHls(tabId, url) {
+  try {
+    const text = await (await fetch(url, { credentials: 'include' })).text();
+    const out = { crypt: hlsCrypt(text), variants: [] };
+    const lines = text.split(/\r?\n/).map((l) => l.trim());
+    lines.forEach((l, i) => {
+      if (!l.startsWith('#EXT-X-STREAM-INF')) return;
+      const u = lines.slice(i + 1).find((x) => x && !x.startsWith('#'));
+      if (!u) return;
+      const res = /RESOLUTION=(\d+x\d+)/.exec(l)?.[1] || '';
+      out.variants.push({ url: new URL(u, url).href, bw: +(/[^-]BANDWIDTH=(\d+)/.exec(',' + l.slice(18))?.[1] || 0), res });
+    });
+    if (out.variants.length) {
+      await Promise.all(out.variants.slice(0, 10).map(async (v) => {
+        try {
+          const t = await (await fetch(v.url, { credentials: 'include' })).text();
+          v.dur = hlsDuration(t);
+          v.size = Math.round((v.bw / 8) * v.dur);
+          if (hlsCrypt(t)) out.crypt = true;
+        } catch {}
+      }));
+      out.variants.sort((a, b) => (parseInt(b.res.split('x')[1]) || 0) - (parseInt(a.res.split('x')[1]) || 0) || b.bw - a.bw);
+    } else out.dur = hlsDuration(text);
+    const st = await load(tabId);
+    const it = st.items[url];
+    if (!it) return;
+    Object.assign(it, out, out.variants.length ? { size: out.variants[0].size || 0 } : {});
+    persist(tabId, st);
+  } catch {}
+}
+// Las variantes que el reproductor pide sueltas se ocultan si ya están dentro de una lista maestra.
+const variantUrls = (st) => new Set(Object.values(st.items).flatMap((i) => (i.variants || []).map((v) => v.url)));
 
 // Peso de lo detectado solo en el DOM (sin cabeceras): HEAD y, si no hay, Range 0-0.
 async function probeSize(tabId, url) {
@@ -142,22 +181,45 @@ function ensureOffscreen() {
   })).catch((e) => { offscreenReady = null; throw e; }));
 }
 
-async function download(tabId, url) {
+// Chrome ignora `filename` en algunas descargas (blob: de la extensión, redirecciones); se fuerza aquí.
+const names = new Map(); // url -> nombre
+function save(url, filename) {
+  names.set(url, filename);
+  return chrome.downloads.download({ url, filename, conflictAction: 'uniquify' });
+}
+chrome.downloads.onDeterminingFilename.addListener((d, suggest) => {
+  const f = names.get(d.url) || names.get(d.finalUrl);
+  if (!f) return;
+  names.delete(d.url); names.delete(d.finalUrl);
+  suggest({ filename: f, conflictAction: 'uniquify' });
+});
+
+// Título de la pestaña aunque el marco principal no haya reportado nada.
+async function tabTitle(tabId, st) {
+  if (!st.title) { try { st.title = (await chrome.tabs.get(tabId)).title || ''; } catch {} }
+  return st.title;
+}
+
+const qLabel = (res) => (res ? `${res.split('x')[1]}p` : '');
+
+async function download(tabId, url, variant) {
   const st = await load(tabId);
   const it = st.items[url] || { url, kind: kindOf(url) };
   const orig = it.kind === 'file' ? fileName(it) : '';
-  const name = clean(orig ? orig.replace(/\.[^.]+$/, '') : st.title);
+  const v = (it.variants || []).find((x) => x.url === variant);
+  if (it.crypt) throw new Error('Stream cifrado/protegido: no se puede descargar.');
+  const name = clean(orig ? orig.replace(/\.[^.]+$/, '') : [await tabTitle(tabId, st), qLabel(v?.res)].filter(Boolean).join(' '));
   if (it.kind === 'blob') throw new Error('Un blob: no se puede descargar directo; usa la entrada HLS/red de la lista.');
   const ext = (VIDEO_EXT.exec(orig)?.[1] || extOf(it)).toLowerCase();
   const multi = it.kind === 'file' && it.size >= MULTI_MIN && it.size <= MULTI_MAX;
   if (it.kind !== 'hls' && !multi) {
-    await chrome.downloads.download({ url: it.url, filename: `${name}.${ext}`, conflictAction: 'uniquify' });
+    await save(it.url, `${name}.${ext}`);
     return { ok: true };
   }
   const id = crypto.randomUUID();
   jobs.set(id, { tabId, url: it.url, name, ext, done: 0, total: 0, state: 'iniciando' });
   await ensureOffscreen();
-  chrome.runtime.sendMessage({ target: 'offscreen', type: multi ? 'file' : 'hls', id, url: it.url, name, ext, mime: it.mime }).catch(() => {});
+  chrome.runtime.sendMessage({ target: 'offscreen', type: multi ? 'file' : 'hls', id, url: v?.url || it.url, name, ext, mime: it.mime }).catch(() => {});
   return { ok: true, job: id };
 }
 
@@ -179,15 +241,16 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       for (const it of msg.items || []) add(tabId, { ...it, src: 'dom' });
       return;
     case 'list':
-      load(tabId).then((st) => reply({
+      load(tabId).then(async (st) => (await tabTitle(tabId, st), st)).then((st) => reply({
         title: st.title,
-        items: Object.values(st.items).filter(isVideo).map((it) => ({ ...it, name: fileName(it) }))
+        items: ((vs) => Object.values(st.items).filter((it) => isVideo(it) && !vs.has(it.url)))(variantUrls(st))
+          .map((it) => ({ ...it, name: it.kind === 'hls' ? st.title || fileName(it) : fileName(it) }))
           .sort((a, b) => (b.size || 0) - (a.size || 0)),
         jobs: [...jobs.entries()].filter(([, j]) => j.tabId === tabId).map(([id, j]) => ({ id, ...j })),
       }));
       return true;
     case 'download':
-      download(tabId, msg.url).then(reply, (e) => reply({ ok: false, error: e.message }));
+      download(tabId, msg.url, msg.variant).then(reply, (e) => reply({ ok: false, error: e.message }));
       return true;
     case 'hls-progress': {
       const j = jobs.get(msg.id);
@@ -197,12 +260,12 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     case 'hls-done': {
       const j = jobs.get(msg.id);
       if (msg.fallback && j) { // servidor sin Range: descarga normal de Chrome
-        chrome.downloads.download({ url: j.url, filename: `${j.name}.${j.ext}`, conflictAction: 'uniquify' })
+        save(j.url, `${j.name}.${j.ext}`)
           .then(() => { j.state = 'listo'; }, (e) => Object.assign(j, { state: 'error', error: e.message }));
         return;
       }
       if (msg.error) { if (j) Object.assign(j, { state: 'error', error: msg.error }); return; }
-      chrome.downloads.download({ url: msg.blobUrl, filename: `${clean(msg.name)}.${msg.ext}`, conflictAction: 'uniquify' })
+      save(msg.blobUrl, `${clean(msg.name)}.${msg.ext}`)
         .then((dlId) => { blobs.set(dlId, msg.blobUrl); if (j) j.state = 'listo'; })
         .catch((e) => { if (j) Object.assign(j, { state: 'error', error: e.message }); });
       return;
