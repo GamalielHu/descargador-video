@@ -1,5 +1,7 @@
-// Documento offscreen: descarga una lista HLS sin cifrar y une sus segmentos en un archivo.
-const CONC = 4;
+// Documento offscreen: une segmentos HLS sin cifrar y baja archivos grandes en varios pedazos a la vez.
+const CONC = 8;        // segmentos HLS en paralelo
+const FILE_CONC = 6;   // conexiones por archivo directo
+const CHUNK = 4 << 20; // 4 MB por pedazo
 const urls = new Set();
 
 async function get(url, as = 'text', range) {
@@ -7,7 +9,7 @@ async function get(url, as = 'text', range) {
   for (let i = 0; i < 3; i++) {
     try {
       const r = await fetch(url, { credentials: 'include', headers: range ? { Range: `bytes=${range[0]}-${range[1]}` } : {} });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok || (range && r.status !== 206)) throw new Error(`HTTP ${r.status}`);
       return as === 'text' ? await r.text() : await r.arrayBuffer();
     } catch (e) { err = e; await new Promise((ok) => setTimeout(ok, 500 * (i + 1))); }
   }
@@ -60,15 +62,12 @@ async function run({ id, url, name }) {
     if (!pl.segs.length) throw new Error('La lista no tiene segmentos.');
     const warn = [audio && 'audio en pista separada: el archivo puede salir sin sonido', pl.live && 'transmisión en vivo: solo se baja lo disponible ahora'].filter(Boolean).join('; ');
     const parts = new Array(pl.segs.length);
-    let done = 0, next = 0;
+    let done = 0;
     prog({ done, total: parts.length, warn });
-    await Promise.all(Array.from({ length: Math.min(CONC, parts.length) }, async () => {
-      while (next < parts.length) {
-        const k = next++;
-        parts[k] = await get(pl.segs[k].u, 'buf', pl.segs[k].range);
-        if (++done % 5 === 0 || done === parts.length) prog({ done, total: parts.length, warn });
-      }
-    }));
+    await pool(CONC, parts.length, async (k) => {
+      parts[k] = await get(pl.segs[k].u, 'buf', pl.segs[k].range);
+      if (++done % 5 === 0 || done === parts.length) prog({ done, total: parts.length, warn });
+    });
     const mp4 = !!pl.map || /\.(mp4|m4s)(?:$|[?#])/i.test(pl.segs[0].u);
     if (pl.map) parts.unshift(await get(pl.map, 'buf'));
     const blobUrl = URL.createObjectURL(new Blob(parts, { type: mp4 ? 'video/mp4' : 'video/mp2t' }));
@@ -79,8 +78,38 @@ async function run({ id, url, name }) {
   }
 }
 
+async function pool(n, count, fn) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, count) }, async () => { while (next < count) await fn(next++); }));
+}
+
+// Archivo directo por rangos HTTP; si el servidor no acepta Range, avisa para usar la descarga normal de Chrome.
+async function runFile({ id, url, name, ext, mime }) {
+  const prog = (o) => chrome.runtime.sendMessage({ type: 'hls-progress', id, ...o }).catch(() => {});
+  try {
+    const probe = await fetch(url, { credentials: 'include', headers: { Range: 'bytes=0-0' } });
+    const size = +(/\/(\d+)\s*$/.exec(probe.headers.get('content-range') || '')?.[1] || 0);
+    probe.body?.cancel();
+    if (probe.status !== 206 || !size) { chrome.runtime.sendMessage({ type: 'hls-done', id, fallback: true }); return; }
+    const total = Math.ceil(size / CHUNK);
+    const parts = new Array(total);
+    let done = 0;
+    prog({ done, total, state: 'descargando' });
+    await pool(FILE_CONC, total, async (k) => {
+      parts[k] = await get(url, 'buf', [k * CHUNK, Math.min(size, (k + 1) * CHUNK) - 1]);
+      if (++done % 4 === 0 || done === total) prog({ done, total, state: 'descargando' });
+    });
+    const blobUrl = URL.createObjectURL(new Blob(parts, { type: mime || 'video/mp4' }));
+    urls.add(blobUrl);
+    chrome.runtime.sendMessage({ type: 'hls-done', id, name, blobUrl, ext });
+  } catch (e) {
+    chrome.runtime.sendMessage({ type: 'hls-done', id, fallback: true, error: e.message });
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.target !== 'offscreen') return;
   if (msg.type === 'hls') run(msg);
+  else if (msg.type === 'file') runFile(msg);
   else if (msg.type === 'revoke' && urls.delete(msg.blobUrl)) URL.revokeObjectURL(msg.blobUrl);
 });

@@ -41,7 +41,7 @@ async function refresh() {
   $jobs.replaceChildren(...r.jobs.map((j) => {
     const pct = j.total ? Math.round((j.done / j.total) * 100) + '%' : '';
     const meta = j.state === 'error' ? j.error : `${j.state} ${pct}${j.warn ? ' · ' + j.warn : ''}`;
-    return row(`HLS: ${j.name}`, meta, [], j.state === 'error' ? 'e' : j.warn ? 'w' : '');
+    return row(`Descargando: ${j.name}`, meta, [], j.state === 'error' ? 'e' : j.warn ? 'w' : '');
   }));
   const key = r.items.map((i) => i.url + i.size).join('|');
   if (key === lastKey) return;

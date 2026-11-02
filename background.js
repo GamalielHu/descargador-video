@@ -4,6 +4,7 @@ const SEGMENT = /\.(ts|m4s|m4a|aac|key|vtt)(?:$|[?#])/i;
 const MEDIA_MIME = /^(video\/|application\/(vnd\.apple\.mpegurl|x-mpegurl|dash\+xml))/i;
 const NOT_MEDIA = /^(image\/|text\/html|font\/|text\/css)|mp2t/i;
 const MIN_SIZE = 100 * 1024;
+const MULTI_MIN = 16 << 20, MULTI_MAX = 1536 << 20; // rango de tamaño para descarga en varios pedazos (en RAM)
 const MAX_ITEMS = 200;
 const EXT_BY_MIME = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/ogg': 'ogv', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv', 'video/x-flv': 'flv' };
 
@@ -111,14 +112,16 @@ async function download(tabId, url) {
   const it = st.items[url] || { url, kind: kindOf(url) };
   const name = clean(st.title);
   if (it.kind === 'blob') throw new Error('Un blob: no se puede descargar directo; usa la entrada HLS/red de la lista.');
-  if (it.kind !== 'hls') {
-    await chrome.downloads.download({ url: it.url, filename: `${name}.${extOf(it)}`, conflictAction: 'uniquify' });
+  const ext = extOf(it);
+  const multi = it.kind === 'file' && it.size >= MULTI_MIN && it.size <= MULTI_MAX;
+  if (it.kind !== 'hls' && !multi) {
+    await chrome.downloads.download({ url: it.url, filename: `${name}.${ext}`, conflictAction: 'uniquify' });
     return { ok: true };
   }
   const id = crypto.randomUUID();
-  jobs.set(id, { tabId, url, name, done: 0, total: 0, state: 'iniciando' });
+  jobs.set(id, { tabId, url: it.url, name, ext, done: 0, total: 0, state: 'iniciando' });
   await ensureOffscreen();
-  chrome.runtime.sendMessage({ target: 'offscreen', type: 'hls', id, url: it.url, name }).catch(() => {});
+  chrome.runtime.sendMessage({ target: 'offscreen', type: multi ? 'file' : 'hls', id, url: it.url, name, ext, mime: it.mime }).catch(() => {});
   return { ok: true, job: id };
 }
 
@@ -156,6 +159,11 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     }
     case 'hls-done': {
       const j = jobs.get(msg.id);
+      if (msg.fallback && j) { // servidor sin Range: descarga normal de Chrome
+        chrome.downloads.download({ url: j.url, filename: `${j.name}.${j.ext}`, conflictAction: 'uniquify' })
+          .then(() => { j.state = 'listo'; }, (e) => Object.assign(j, { state: 'error', error: e.message }));
+        return;
+      }
       if (msg.error) { if (j) Object.assign(j, { state: 'error', error: msg.error }); return; }
       chrome.downloads.download({ url: msg.blobUrl, filename: `${clean(msg.name)}.${msg.ext}`, conflictAction: 'uniquify' })
         .then((dlId) => { blobs.set(dlId, msg.blobUrl); if (j) j.state = 'listo'; })
