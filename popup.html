@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Descargador de Video</title>
+<style>
+  body{margin:0;width:380px;font:13px system-ui,sans-serif;background:#0d1117;color:#e6edf3}
+  header{padding:10px 12px;border-bottom:1px solid #30363d;font-weight:600}
+  #list{max-height:440px;overflow:auto}
+  .i{display:flex;gap:6px;align-items:center;padding:8px 12px;border-bottom:1px solid #21262d}
+  .n{flex:1;min-width:0}
+  .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .m{color:#8b949e;font-size:11px;margin-top:2px}
+  .w{color:#d29922}.e{color:#f85149}
+  button{border:0;border-radius:4px;padding:5px 8px;cursor:pointer;font:inherit;color:#fff;background:#238636}
+  button.c{background:#30363d}
+  button:disabled{opacity:.5;cursor:default}
+  .empty{padding:24px 12px;color:#8b949e;text-align:center}
+  footer{padding:8px 12px;color:#8b949e;font-size:11px}
+</style>
+</head>
+<body>
+<header>Videos en esta pestaña</header>
+<div id="jobs"></div>
+<div id="list"><div class="empty">Buscando…</div></div>
+<footer>Contenido con DRM (Netflix, Disney+…) o streams cifrados no se pueden descargar.</footer>
+<script type="module" src="popup.js"></script>
+</body>
+</html>
