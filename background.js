@@ -73,7 +73,7 @@ function fileName(it) {
   if (it.fname) return it.fname;
   try { return decodeURIComponent(new URL(it.url).pathname.split('/').filter(Boolean).pop() || ''); } catch { return ''; }
 }
-const isVideo = (it) => it.kind === 'hls' || VIDEO_EXT.test(fileName(it));
+const isVideo = (it) => it.kind === 'hls' || (it.kind === 'file' && VIDEO_EXT.test(fileName(it)));
 
 // Calidades HLS: lee la lista maestra, cada variante y estima el peso (BANDWIDTH × duración).
 const hlsDuration = (t) => [...t.matchAll(/#EXTINF:([\d.]+)/g)].reduce((a, m) => a + +m[1], 0);
@@ -113,20 +113,20 @@ const variantUrls = (st) => new Set(Object.values(st.items).flatMap((i) => (i.va
 
 // Peso de lo detectado solo en el DOM (sin cabeceras): HEAD y, si no hay, Range 0-0.
 async function probeSize(tabId, url) {
-  let size = 0;
-  try {
-    const r = await fetch(url, { method: 'HEAD', credentials: 'include' });
-    size = r.ok ? +(r.headers.get('content-length') || 0) : 0;
-    if (!size) {
-      const g = await fetch(url, { credentials: 'include', headers: { Range: 'bytes=0-0' } });
-      size = +(/\/(\d+)\s*$/.exec(g.headers.get('content-range') || '')?.[1] || 0);
-      g.body?.cancel();
-    }
-  } catch { return; }
+  // HEAD y Range 0-0 en paralelo, máx. 6 s: gana el primero que dé un tamaño.
+  const opt = { credentials: 'include', signal: AbortSignal.timeout(6000) };
+  const viaHead = fetch(url, { ...opt, method: 'HEAD' }).then((r) => (r.ok && +(r.headers.get('content-length') || 0)) || Promise.reject());
+  const viaRange = fetch(url, { ...opt, headers: { Range: 'bytes=0-0' } }).then((r) => {
+    r.body?.cancel();
+    const n = +(/\/(\d+)\s*$/.exec(r.headers.get('content-range') || '')?.[1] || 0) || (r.status === 200 && +(r.headers.get('content-length') || 0));
+    return n || Promise.reject();
+  });
+  const size = await Promise.any([viaHead, viaRange]).catch(() => 0);
   const st = await load(tabId);
   const it = st.items[url];
-  if (!it || !size) return;
-  if (size < MIN_SIZE) delete st.items[url]; else it.size = size;
+  if (!it) return;
+  it.probed = true;
+  if (size && size < MIN_SIZE) delete st.items[url]; else if (size) it.size = size;
   persist(tabId, st);
 }
 

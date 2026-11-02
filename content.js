@@ -108,7 +108,7 @@
       const q = (res) => (res ? `${res.split('x')[1]}p` : '');
       row.querySelector('.m').textContent = it.crypt ? 'Cifrado/DRM: no se puede'
         : it.kind === 'hls' ? (vs.length ? `${vs.length} calidades` : 'Stream HLS')
-        : [q(it.res), fmt(it.size).slice(3) || 'calculando peso…'].filter(Boolean).join(' · ');
+        : [q(it.res), fmt(it.size).slice(3) || (it.probed ? 'peso desconocido' : 'calculando peso…')].filter(Boolean).join(' · ');
       const b = row.querySelector('.d');
       if (it.crypt) b.disabled = true;
       if (vs.length) {

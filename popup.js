@@ -46,7 +46,7 @@ async function refresh() {
     const meta = j.state === 'error' ? j.error : `${j.state} ${pct}${j.warn ? ' · ' + j.warn : ''}`;
     return row(`Descargando: ${j.name}`, meta, [], j.state === 'error' ? 'e' : j.warn ? 'w' : '');
   }));
-  const key = r.items.map((i) => i.url + i.size + i.res + (i.variants || []).length + i.crypt).join('|');
+  const key = r.items.map((i) => i.url + i.size + i.probed + i.res + (i.variants || []).length + i.crypt).join('|');
   if (key === lastKey) return;
   lastKey = key;
   if (!r.items.length) { $list.innerHTML = '<div class="empty">No se detectaron archivos de video. Reproduce el video y vuelve a abrir.</div>'; return; }
@@ -54,7 +54,7 @@ async function refresh() {
     const vs = it.variants || [];
     const meta = it.crypt ? 'Cifrado/DRM: no se puede descargar'
       : it.kind === 'hls' ? (vs.length ? `${vs.length} calidades` : 'Stream HLS' + (it.dur ? ` · ${Math.round(it.dur / 60)} min` : ''))
-      : [q(it.res), fmtSize(it.size) || 'calculando peso…'].filter(Boolean).join(' · ');
+      : [q(it.res), fmtSize(it.size) || (it.probed ? 'peso desconocido' : 'calculando peso…')].filter(Boolean).join(' · ');
     let sel = null;
     if (vs.length) {
       sel = document.createElement('select');
