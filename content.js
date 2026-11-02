@@ -52,6 +52,17 @@
     send({ type: 'found', items: [{ url: v.currentSrc, res: `${v.videoWidth}x${v.videoHeight}` }], title: document.title })?.catch?.(() => {});
   }, true);
   // URLs de fetch/XHR avisadas por inject.js (mundo MAIN).
+  // Pistas MSE capturadas por inject.js → background (url sintética mse:<marco>/<id>).
+  const mseKey = Math.random().toString(36).slice(2, 8);
+  window.addEventListener('message', (e) => {
+    const d = e.source === window && e.data;
+    if (d && d.__vdlMse === 'blob' && /^blob:/.test(d.url)) { send({ type: 'mse-blob', url: d.url, name: d.name })?.catch?.(() => {}); return; }
+    if (!d || d.__vdlMse !== 'tracks') return;
+    send({ type: 'mse', frame: `mse:${mseKey}`, drm: d.drm, items: d.list.map((t) => ({ url: `mse:${mseKey}/${t.id}`, mseId: t.id, mime: t.mime, size: t.bytes })), title: document.title })?.catch?.(() => {});
+  });
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'mse-save' && msg.url.startsWith(`mse:${mseKey}/`)) window.postMessage({ __vdlMseCmd: 'save', id: msg.mseId, name: msg.name }, '*');
+  });
   window.addEventListener('message', (e) => { if (e.source === window && e.data && e.data.__vdl === 1 && typeof e.data.url === 'string') report(e.data.url, 'fetch'); });
   scanEl(document.documentElement);
 

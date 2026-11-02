@@ -52,7 +52,8 @@ async function refresh() {
   if (!r.items.length) { $list.innerHTML = '<div class="empty">No se detectaron archivos de video. Reproduce el video y vuelve a abrir.</div>'; return; }
   $list.replaceChildren(...r.items.map((it) => {
     const vs = it.variants || [];
-    const meta = it.crypt ? 'Cifrado/DRM: no se puede descargar'
+    const meta = it.kind === 'mse' ? `Captura ${/audio/i.test(it.mime) ? 'audio' : 'video'} · ${fmtSize(it.size) || '0 B'} grabados`
+      : it.crypt ? 'Cifrado/DRM: no se puede descargar'
       : it.kind === 'hls' ? (vs.length ? `${vs.length} calidades` : 'Stream HLS' + (it.dur ? ` · ${Math.round(it.dur / 60)} min` : ''))
       : [q(it.res), fmtSize(it.size) || (it.probed ? 'peso desconocido' : 'calculando peso…')].filter(Boolean).join(' · ');
     let sel = null;
@@ -60,15 +61,23 @@ async function refresh() {
       sel = document.createElement('select');
       vs.forEach((v) => sel.add(new Option(optLabel(v), v.url)));
     }
-    const copy = button('Copiar', 'c', (b) => navigator.clipboard.writeText(it.url).then(() => { b.textContent = '✓'; }), it.url);
+    const copy = it.kind === 'mse' ? null : button('Copiar', 'c', (b) => navigator.clipboard.writeText(it.url).then(() => { b.textContent = '✓'; }), it.url);
     const dl = it.kind === 'blob'
       ? button('Bajar', '', null, 'Stream interno de la página; usa la entrada HLS o Archivo')
-      : button(it.kind === 'hls' ? 'Unir y bajar' : 'Bajar', '', it.crypt ? null : (b) => download(it.url, b, sel?.value), it.kind === 'dash' ? 'DASH: se baja el manifiesto .mpd' : '');
+      : button(it.kind === 'hls' ? 'Unir y bajar' : it.kind === 'mse' ? 'Guardar' : 'Bajar', '', it.crypt ? null : (b) => download(it.url, b, sel?.value), it.kind === 'dash' ? 'DASH: se baja el manifiesto .mpd' : '');
     const el = row(it.name || shortName(it.url), meta, [sel, copy, dl].filter(Boolean), it.crypt ? 'e' : '');
     el.querySelector('.t').title = it.url;
     return el;
   }));
 }
+
+// Interruptor de captura MSE (se aplica al recargar la página).
+const $mse = document.getElementById('mse');
+chrome.storage.local.get('mse').then(({ mse }) => { $mse.checked = !!mse; });
+$mse.addEventListener('change', () => {
+  chrome.storage.local.set({ mse: $mse.checked });
+  document.getElementById('mse-tip').textContent = $mse.checked ? 'Recarga la página y reproduce el video completo, sin adelantar.' : '';
+});
 
 refresh();
 setInterval(refresh, 1000);

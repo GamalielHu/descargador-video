@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Descargador de Video",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Detecta y descarga videos y streams HLS sin cifrar de la página actual.",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "scripting", "downloads", "webRequest", "storage", "offscreen"],
@@ -20,6 +20,12 @@
       "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["mse-flag.js"],
+      "run_at": "document_start",
       "all_frames": true
     }
   ]

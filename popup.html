@@ -17,11 +17,15 @@
   button:disabled{opacity:.5;cursor:default}
   select{max-width:120px;background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:4px;padding:4px;font:inherit}
   .empty{padding:24px 12px;color:#8b949e;text-align:center}
+  .sw{display:block;padding:6px 12px;border-bottom:1px solid #21262d}
+  .sw:empty{display:none}
   footer{padding:8px 12px;color:#8b949e;font-size:11px}
 </style>
 </head>
 <body>
 <header>Videos en esta pestaña</header>
+<label class="sw"><input type="checkbox" id="mse"> Captura de streams mientras se reproduce (MSE)</label>
+<div id="mse-tip" class="m sw"></div>
 <div id="jobs"></div>
 <div id="list"><div class="empty">Buscando…</div></div>
 <footer>Contenido con DRM (Netflix, Disney+…) o streams cifrados no se pueden descargar.</footer>

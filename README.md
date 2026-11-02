@@ -17,3 +17,4 @@ No descarga contenido con DRM (Widevine) ni streams cifrados.
 | `content.js` | Escaneo del DOM y panel flotante |
 | `popup.html/js`, `shared.js` | Lista de videos de la pestaña |
 | `offscreen.html/js` | Une segmentos HLS |
+| `mse-flag.js` | Enciende la captura pasiva MSE si está activada en el popup |

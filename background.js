@@ -73,7 +73,7 @@ function fileName(it) {
   if (it.fname) return it.fname;
   try { return decodeURIComponent(new URL(it.url).pathname.split('/').filter(Boolean).pop() || ''); } catch { return ''; }
 }
-const isVideo = (it) => it.kind === 'hls' || (it.kind === 'file' && VIDEO_EXT.test(fileName(it)));
+const isVideo = (it) => it.kind === 'hls' || it.kind === 'mse' || (it.kind === 'file' && VIDEO_EXT.test(fileName(it)));
 
 // Calidades HLS: lee la lista maestra, cada variante y estima el peso (BANDWIDTH × duración).
 const hlsDuration = (t) => [...t.matchAll(/#EXTINF:([\d.]+)/g)].reduce((a, m) => a + +m[1], 0);
@@ -208,6 +208,12 @@ async function download(tabId, url, variant) {
   const orig = it.kind === 'file' ? fileName(it) : '';
   const v = (it.variants || []).find((x) => x.url === variant);
   if (it.crypt) throw new Error('Stream cifrado/protegido: no se puede descargar.');
+  if (it.kind === 'mse') {
+    const pista = /audio/i.test(it.mime) ? 'audio' : 'video';
+    const ext = /webm/i.test(it.mime) ? 'webm' : /audio/i.test(it.mime) ? 'm4a' : 'mp4';
+    await chrome.tabs.sendMessage(tabId, { type: 'mse-save', url: it.url, mseId: it.mseId, name: `${clean(await tabTitle(tabId, st))} (${pista}).${ext}` });
+    return { ok: true };
+  }
   const name = clean(orig ? orig.replace(/\.[^.]+$/, '') : [await tabTitle(tabId, st), qLabel(v?.res)].filter(Boolean).join(' '));
   if (it.kind === 'blob') throw new Error('Un blob: no se puede descargar directo; usa la entrada HLS/red de la lista.');
   const ext = (VIDEO_EXT.exec(orig)?.[1] || extOf(it)).toLowerCase();
@@ -236,6 +242,17 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.target === 'offscreen') return;
   const tabId = msg.tabId ?? sender.tab?.id;
   switch (msg.type) {
+    case 'mse-blob': // blob de la página con la pista capturada
+      if (msg.url.startsWith('blob:' + new URL(sender.url).origin + '/')) save(msg.url, msg.name).catch(() => {});
+      return;
+    case 'mse': // capturas MSE: se reemplazan las del marco con el estado actual (bytes crecen al reproducir)
+      load(tabId).then((st) => {
+        if (sender.frameId === 0 && msg.title) st.title = msg.title;
+        for (const k of Object.keys(st.items)) if (st.items[k].kind === 'mse' && (k.startsWith(msg.frame + '/') || msg.drm)) delete st.items[k];
+        for (const it of msg.items) st.items[it.url] = { ...it, kind: 'mse', src: ['mse'], t: Date.now() };
+        persist(tabId, st);
+      });
+      return;
     case 'found':
       load(tabId).then((st) => { if (sender.frameId === 0 && msg.title) st.title = msg.title; });
       for (const it of msg.items || []) add(tabId, { ...it, src: 'dom' });
@@ -244,7 +261,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       load(tabId).then(async (st) => (await tabTitle(tabId, st), st)).then((st) => reply({
         title: st.title,
         items: ((vs) => Object.values(st.items).filter((it) => isVideo(it) && !vs.has(it.url)))(variantUrls(st))
-          .map((it) => ({ ...it, name: it.kind === 'hls' ? st.title || fileName(it) : fileName(it) }))
+          .map((it) => ({ ...it, name: it.kind === 'mse' ? `${st.title} (${/audio/i.test(it.mime) ? 'audio' : 'video'})` : it.kind === 'hls' ? st.title || fileName(it) : fileName(it) }))
           .sort((a, b) => (b.size || 0) - (a.size || 0)),
         jobs: [...jobs.entries()].filter(([, j]) => j.tabId === tabId).map(([id, j]) => ({ id, ...j })),
       }));
